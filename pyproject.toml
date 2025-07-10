@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "wav-to-mp3"
+version = "0.1.0"
+description = "WAV to MP3 conversion and tagging tool"
+authors = ["Daniel Rosenwald <danielrosenwald@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "wav_to_mp3"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+typer = {extras = ["all"], version = "^0.15.1"}
+
+[tool.poetry.scripts]
+wav-to-mp3 = "wav_to_mp3:app"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
