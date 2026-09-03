@@ -1,10 +1,44 @@
 import os
 import glob
 import subprocess
+import wave
 import typer
-from typing import Optional
 
-app = typer.Typer(help="Convert WAV files to MP3 with ID3 tags using FFmpeg.")
+app = typer.Typer(help="Convert WAV files to MP3 or AIFF with metadata using FFmpeg.")
+
+
+def _get_wav_bit_depth(wav_path: str) -> int:
+    """
+    Read WAV bit depth from the sample width.
+    """
+    with wave.open(wav_path, "rb") as wav_file:
+        return wav_file.getsampwidth() * 8
+
+
+def _build_output_settings(wav_path: str, use_aiff: bool) -> tuple[str, list[str]]:
+    """
+    Build output path and codec settings based on selected output format.
+    """
+    base_name = os.path.basename(wav_path)
+    name_without_ext = os.path.splitext(base_name)[0]
+    output_extension = ".aiff" if use_aiff else ".mp3"
+    output_path = os.path.join(
+        os.path.dirname(wav_path), name_without_ext + output_extension
+    )
+
+    if not use_aiff:
+        return output_path, ["-ab", "320k"]
+
+    input_bit_depth = _get_wav_bit_depth(wav_path)
+    target_bit_depth = min(input_bit_depth, 24)
+    if target_bit_depth <= 8:
+        codec_args = ["-c:a", "pcm_s8"]
+    elif target_bit_depth <= 16:
+        codec_args = ["-c:a", "pcm_s16be"]
+    else:
+        codec_args = ["-c:a", "pcm_s24be"]
+
+    return output_path, codec_args
 
 
 def process_file(
@@ -12,20 +46,25 @@ def process_file(
     overwrite: bool = False,
     delete_wav: bool = False,
     convert_bad_names: bool = False,
+    use_aiff: bool = False,
 ):
     """
-    Converts a WAV file to a 320kbps MP3 and embeds metadata using FFmpeg.
+    Converts a WAV file to MP3 or AIFF and embeds metadata using FFmpeg.
     """
     try:
         typer.echo(f"Processing file: {wav_path}")
         base_name = os.path.basename(wav_path)
         name_without_ext = os.path.splitext(base_name)[0]
-        mp3_path = os.path.join(os.path.dirname(wav_path), name_without_ext + ".mp3")
-        if os.path.exists(mp3_path):
+        output_path, format_args = _build_output_settings(wav_path, use_aiff)
+        output_label = "AIFF" if use_aiff else "MP3"
+
+        if os.path.exists(output_path):
             if overwrite:
-                typer.echo(f"Overwriting existing MP3: {mp3_path}")
+                typer.echo(f"Overwriting existing {output_label}: {output_path}")
             else:
-                typer.echo(f"Skipping '{wav_path}' as an MP3 file already exists.")
+                typer.echo(
+                    f"Skipping '{wav_path}' as a {output_label} file already exists."
+                )
                 return
 
         parts = name_without_ext.split(" - ", 1)
@@ -53,19 +92,25 @@ def process_file(
             "error",
             "-i",
             wav_path,
-            "-ab",
-            "320k",
         ]
+        command += format_args
+        if use_aiff:
+            # AIFF stores artist/title in an ID3 chunk; enable writing it explicitly.
+            command += ["-write_id3v2", "1"]
         if artist:
             command += ["-metadata", f"artist={artist}"]
+            if use_aiff:
+                command += ["-metadata", f"author={artist}"]
         if title:
             command += ["-metadata", f"title={title}"]
-        command.append(mp3_path)
+            if use_aiff:
+                command += ["-metadata", f"name={title}"]
+        command.append(output_path)
 
         subprocess.run(
             command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True
         )
-        typer.echo(f"Converted and tagged '{wav_path}' -> '{mp3_path}'")
+        typer.echo(f"Converted and tagged '{wav_path}' -> '{output_path}'")
         if delete_wav:
             os.remove(wav_path)
             typer.echo(f"Deleted original WAV: {wav_path}")
@@ -82,6 +127,7 @@ def process_directory(
     delete_wav: bool = False,
     convert_bad_names: bool = False,
     recursive: bool = False,
+    use_aiff: bool = False,
 ):
     """
     Searches the specified directory for .wav files and processes each file.
@@ -98,6 +144,7 @@ def process_directory(
             overwrite=overwrite,
             delete_wav=delete_wav,
             convert_bad_names=convert_bad_names,
+            use_aiff=use_aiff,
         )
 
 
@@ -108,7 +155,7 @@ def main(
         False, "--delete/--keep", help="Delete WAV files after successful conversion."
     ),
     overwrite: bool = typer.Option(
-        False, "--overwrite/--skip-existing", help="Overwrite existing MP3 files."
+        False, "--overwrite/--skip-existing", help="Overwrite existing output files."
     ),
     convert_bad_names: bool = typer.Option(
         False,
@@ -121,9 +168,14 @@ def main(
         "-r",
         help="Process directories recursively (only applies to directories).",
     ),
+    aiff: bool = typer.Option(
+        False,
+        "--aiff",
+        help="Convert to AIFF instead of MP3. AIFF uses 24-bit unless WAV bit depth is lower.",
+    ),
 ):
     """
-    Convert WAV files to MP3 with ID3 tags using FFmpeg.
+    Convert WAV files to MP3 or AIFF with metadata using FFmpeg.
     """
     if not os.path.exists(input_path):
         typer.echo("The provided path does not exist.")
@@ -138,6 +190,7 @@ def main(
             overwrite=overwrite,
             delete_wav=delete,
             convert_bad_names=convert_bad_names,
+            use_aiff=aiff,
         )
     else:
         process_directory(
@@ -146,4 +199,5 @@ def main(
             delete_wav=delete,
             convert_bad_names=convert_bad_names,
             recursive=recursive,
+            use_aiff=aiff,
         )
